@@ -31,7 +31,7 @@ class FinancialDataPreprocessor:
     def __init__(self, data_dir='Dataset', output_dir='Insight_output'):
         self.data_dir = data_dir
         self.output_dir = output_dir
-        self.group_id = '1'
+        self.group_id = '13'
         
         self.data_files = {
             'solvency': os.path.join(data_dir, '偿债能力', 'FI_T1.xlsx'),
@@ -47,13 +47,23 @@ class FinancialDataPreprocessor:
         
         self.column_order = [
             'Stkcd', 'Accper', 'Typrep', 'Indcd', 'isviolation', 'isST',
+            # 偿债能力（FI_T1.xlsx）
+            'F010101A', 'F010201A', 'F010702B', 'F010801B', 'F011201A',
+            # 经营能力（FI_T4.xlsx）
             'F040101B', 'F040202B', 'F040203B', 'F040205C', 'F040401B', 'F040503B', 'F040505C',
             'F040803B', 'F040805C', 'F041203B', 'F041205C', 'F041301B', 'F041403B', 'F041405C',
             'F041703B', 'F041705C', 'F041803B', 'F041805C',
+            # 盈利能力（FI_T5.xlsx）
             'F050104C', 'F050204C', 'F053201B', 'F053301C', 'F052401B', 'F053202B',
+            # 发展能力（FI_T8.xlsx）
             'F080102A', 'F081002B', 'F082601B', 'F080603A',
+            # 风险水平（FI_T7.xlsx）
             'F070101B', 'F070201B', 'F070301B',
-            'F090102B', 'F020108',
+            # 每股指标（FI_T9.xlsx）
+            'F090102B',
+            # 披露财务（FI_T2.xlsx）
+            'F020108',
+            # 股利分配（FI_T11.xlsx）
             'F110101B', 'F110301B', 'F110801B'
         ]
         
@@ -134,9 +144,15 @@ class FinancialDataPreprocessor:
         if 'Accper' in df.columns:
             df['Year'] = df['Accper'].apply(self.extract_year)
         
-        # Typrep 优先级：K > A > B > C > 其他
+        # Typrep 优先级（基于CSMAR标准）：A(合并报表期末) > B(母公司报表期末) > C(合并报表期初) > D(母公司报表期初) > 其他
         if 'Typrep' in df.columns:
-            typrep_priority = {'K': 1, 'A': 2, 'B': 3, 'C': 4}
+            typrep_priority = {
+                'A': 1,  # 合并报表期末（最常用）
+                'B': 2,  # 母公司报表期末
+                'C': 3,  # 合并报表期初
+                'D': 4,  # 母公司报表期初
+                'K': 5, 'S': 6, 'H': 7, 'F': 8, 'E': 9, 'N': 10
+            }
             df['typrep_priority'] = df['Typrep'].map(typrep_priority).fillna(99)
         else:
             df['typrep_priority'] = 99

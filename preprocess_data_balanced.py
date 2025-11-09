@@ -31,7 +31,7 @@ class FinancialDataPreprocessor:
     def __init__(self, data_dir='Dataset', output_dir='Insight_output'):
         self.data_dir = data_dir
         self.output_dir = output_dir
-        self.group_id = '1'
+        self.group_id = '13'
         
         self.data_files = {
             'solvency': os.path.join(data_dir, '偿债能力', 'FI_T1.xlsx'),
@@ -47,22 +47,39 @@ class FinancialDataPreprocessor:
         
         self.column_order = [
             'Stkcd', 'Accper', 'Typrep', 'Indcd', 'isviolation', 'isST',
+            # 偿债能力（FI_T1.xlsx）
+            'F010101A', 'F010201A', 'F010702B', 'F010801B', 'F011201A',
+            # 经营能力（FI_T4.xlsx）
             'F040101B', 'F040202B', 'F040203B', 'F040205C', 'F040401B', 'F040503B', 'F040505C',
             'F040803B', 'F040805C', 'F041203B', 'F041205C', 'F041301B', 'F041403B', 'F041405C',
             'F041703B', 'F041705C', 'F041803B', 'F041805C',
+            # 盈利能力（FI_T5.xlsx）
             'F050104C', 'F050204C', 'F053201B', 'F053301C', 'F052401B', 'F053202B',
+            # 发展能力（FI_T8.xlsx）
             'F080102A', 'F081002B', 'F082601B', 'F080603A',
+            # 风险水平（FI_T7.xlsx）
             'F070101B', 'F070201B', 'F070301B',
-            'F090102B', 'F020108',
+            # 每股指标（FI_T9.xlsx）
+            'F090102B',
+            # 披露财务（FI_T2.xlsx）
+            'F020108',
+            # 股利分配（FI_T11.xlsx）
             'F110101B', 'F110301B', 'F110801B'
         ]
         
-        # Typrep 优先级：K(合并) > C(合并调整) > A(年报) > B(半年报) > 其他
-        self.typrep_priority = {'K': 1, 'C': 2, 'A': 3, 'B': 4, 'S': 5, 'H': 6, 'F': 7, 'E': 8, 'N': 9}
+        # Typrep 优先级（只保留A和B类型，优先A）：
+        # A(合并报表期末) > B(母公司报表期末)
+        # 注意：对于同一个(Stkcd, Year, Month)，如果有A类型就保留A，否则保留B
+        self.typrep_priority = {
+            'A': 1,  # 合并报表期末（优先保留）
+            'B': 2,  # 母公司报表期末（如果没有A才保留）
+            # 其他类型不保留
+            'C': 99, 'D': 99, 'K': 99, 'S': 99, 'H': 99, 'F': 99, 'E': 99, 'N': 99
+        }
         
         logger.info("=" * 80)
         logger.info("财务舞弊识别实验1 - 数据预处理（平衡版）")
-        logger.info("策略：三键 (Stkcd, Year, Typrep) + 智能去重避免数据爆炸")
+        logger.info("策略：季度去重 (Stkcd, Year, Month) + Typrep优先A类型")
         logger.info("=" * 80)
     
     def read_excel_safe(self, filepath):
@@ -99,6 +116,21 @@ class FinancialDataPreprocessor:
         except:
             return None
     
+    def extract_month(self, date_str):
+        """从日期字符串提取月份（用于季度判断）"""
+        if pd.isna(date_str):
+            return None
+        try:
+            if isinstance(date_str, str):
+                parts = date_str.split('-')
+                if len(parts) >= 2:
+                    return int(parts[1])
+            elif isinstance(date_str, (pd.Timestamp, datetime)):
+                return date_str.month
+            return None
+        except:
+            return None
+    
     def load_and_prepare_table(self, name, filepath):
         """Step 1-2: 读取、规范化并智能去重单个主题表"""
         if not os.path.exists(filepath):
@@ -126,49 +158,89 @@ class FinancialDataPreprocessor:
                     column_mapping[col] = 'F010101A'
                 elif '速动比率' in col:
                     column_mapping[col] = 'F010201A'
-                elif '利息保障倍数B' in col:
+                elif '利息保障倍数B' in col or '利息保障倍数' in col:
                     column_mapping[col] = 'F010702B'
-                elif '现金流量' in col and '流动负债' in col:
+                elif ('现金流量' in col and '流动负债' in col) or ('经营活动产生的现金流量净额' in col and '流动负债' in col):
                     column_mapping[col] = 'F010801B'
                 elif '资产负债率' in col:
                     column_mapping[col] = 'F011201A'
+                # 保留所有以F开头的列（如果已经是标准格式）
+                elif col.startswith('F') and len(col) >= 8:
+                    column_mapping[col] = col
             df = df.rename(columns=column_mapping)
+            logger.info(f"  偿债能力表字段映射完成，保留字段: {[c for c in df.columns if c.startswith('F')]}")
+        
+        # 处理披露财务指标表（没有Typrep字段，只有Stkcd和Accper）
+        if name == 'disclosure':
+            # 确保F020108字段存在
+            if 'F020108' not in df.columns:
+                # 尝试查找包含"基本每股收益"或"每股收益"的列
+                for col in df.columns:
+                    if '基本每股收益' in str(col) or '每股收益' in str(col) or col == 'F020108':
+                        if col != 'F020108':
+                            df = df.rename(columns={col: 'F020108'})
+                            logger.info(f"  将列 '{col}' 映射为 'F020108'")
+                        break
+            logger.info(f"  披露财务指标表字段: {list(df.columns)}")
         
         # 标准化键字段
         if 'Stkcd' in df.columns:
             df['Stkcd_std'] = df['Stkcd'].apply(self.standardize_stock_code)
         if 'Accper' in df.columns:
             df['Year'] = df['Accper'].apply(self.extract_year)
+            df['Month'] = df['Accper'].apply(self.extract_month)
         
         # 清洗：移除无效记录
         before = len(df)
-        df = df[df['Stkcd_std'].notna() & df['Year'].notna()].copy()
+        df = df[df['Stkcd_std'].notna() & df['Year'].notna() & df['Month'].notna()].copy()
         after = len(df)
         if before > after:
             logger.info(f"  清洗无效键: -{before - after} 行")
         
-        # 关键优化：按 Typrep 优先级，每个 (Stkcd, Year, Typrep) 只保留一条
+        # 关键优化：按季度去重，只保留A和B类型，优先A
         if 'Typrep' in df.columns:
             df = df[df['Typrep'].notna()].copy()
+            
+            # 只保留A和B类型
+            before_filter = len(df)
+            df = df[df['Typrep'].isin(['A', 'B'])].copy()
+            after_filter = len(df)
+            if before_filter > after_filter:
+                logger.info(f"  过滤非A/B类型: -{before_filter - after_filter} 行")
+            
+            # 添加优先级列
             df['typrep_priority'] = df['Typrep'].map(self.typrep_priority).fillna(99)
             
-            # 按优先级排序后去重
-            df = df.sort_values(['Stkcd_std', 'Year', 'Typrep', 'typrep_priority'])
-            df = df.drop_duplicates(subset=['Stkcd_std', 'Year', 'Typrep'], keep='first')
-            df = df.drop(columns=['typrep_priority'])
+            # 按季度去重：对于同一个(Stkcd, Year, Month)，优先保留A类型
+            # 1. 先按优先级排序（A在前，B在后）
+            df = df.sort_values(['Stkcd_std', 'Year', 'Month', 'typrep_priority'])
+            
+            # 2. 对于同一个(Stkcd, Year, Month)，如果有A就只保留A，否则保留B
+            # 先标记每个组合是否有A类型
+            df['has_A'] = df.groupby(['Stkcd_std', 'Year', 'Month'])['Typrep'].transform(lambda x: (x == 'A').any())
+            
+            # 如果有A，只保留A类型；如果没有A，保留B类型
+            df = df[((df['has_A']) & (df['Typrep'] == 'A')) | (~df['has_A'] & (df['Typrep'] == 'B'))].copy()
+            
+            # 3. 对于同一个(Stkcd, Year, Month, Typrep)组合，只保留第一条
+            df = df.drop_duplicates(subset=['Stkcd_std', 'Year', 'Month', 'Typrep'], keep='first')
+            
+            # 删除临时列
+            df = df.drop(columns=['typrep_priority', 'has_A', 'Month'])
             
             logger.info(f"  去重后: {len(df)} 行, 报表类型: {df['Typrep'].value_counts().to_dict()}")
         else:
-            # 无 Typrep 的表（如披露财务），按 (Stkcd, Year) 去重
-            df = df.drop_duplicates(subset=['Stkcd_std', 'Year'], keep='first')
+            # 无 Typrep 的表（如披露财务），按 (Stkcd, Year, Month) 去重
+            df = df.drop_duplicates(subset=['Stkcd_std', 'Year', 'Month'], keep='first')
+            df = df.drop(columns=['Month'])
             logger.info(f"  去重后: {len(df)} 行")
         
         return df
     
     def merge_financial_tables(self):
-        """Step 3: 横向并表（三键策略 + 外连接保留所有记录）"""
+        """Step 3: 横向并表（季度去重策略 + 外连接保留所有记录）"""
         logger.info("\n" + "=" * 80)
-        logger.info("Step 3: 数据集成 - 横向并表（三键策略）")
+        logger.info("Step 3: 数据集成 - 横向并表（季度去重策略）")
         logger.info("=" * 80)
         
         # 加载所有主题表
@@ -185,7 +257,10 @@ class FinancialDataPreprocessor:
             return None
         
         base_df = dfs['operation'].copy()
-        merge_keys = ['Stkcd_std', 'Year', 'Typrep']
+        # 添加Month列用于合并
+        if 'Accper' in base_df.columns:
+            base_df['Month'] = base_df['Accper'].apply(self.extract_month)
+        merge_keys = ['Stkcd_std', 'Year', 'Month', 'Typrep']
         
         # 选择基准表的指标列和其他重要字段
         indicator_cols = [c for c in base_df.columns if c.startswith('F')]
@@ -197,7 +272,8 @@ class FinancialDataPreprocessor:
         logger.info(f"\n基准表（经营能力）: {len(base_df)} 行")
         
         # 依次合并其他表（使用 outer join 保留所有数据）
-        merge_order = ['profit', 'growth', 'solvency', 'risk', 'pershare', 'dividend']
+        # 注意：disclosure表没有Typrep字段，需要单独处理
+        merge_order = ['profit', 'growth', 'solvency', 'risk', 'pershare', 'dividend', 'disclosure']
         
         for name in merge_order:
             if name not in dfs:
@@ -210,6 +286,10 @@ class FinancialDataPreprocessor:
             indicator_cols = [c for c in df.columns if c.startswith('F')]
             other_cols = [c for c in df.columns if c in ['Indcd']]
             
+            # 添加Month列用于合并
+            if 'Accper' in df.columns and 'Month' not in df.columns:
+                df['Month'] = df['Accper'].apply(self.extract_month)
+            
             # 检查是否有 Typrep
             has_typrep = 'Typrep' in df.columns
             
@@ -217,9 +297,9 @@ class FinancialDataPreprocessor:
                 keep_cols_df = merge_keys + other_cols + indicator_cols
                 keys_to_use = merge_keys
             else:
-                # 无 Typrep 的表，只使用 (Stkcd, Year)
-                keep_cols_df = ['Stkcd_std', 'Year'] + other_cols + indicator_cols
-                keys_to_use = ['Stkcd_std', 'Year']
+                # 无 Typrep 的表（如披露财务），只使用 (Stkcd, Year, Month)
+                keep_cols_df = ['Stkcd_std', 'Year', 'Month'] + other_cols + indicator_cols
+                keys_to_use = ['Stkcd_std', 'Year', 'Month']
             
             keep_cols_df = [c for c in keep_cols_df if c in df.columns]
             df_subset = df[keep_cols_df].copy()
@@ -237,6 +317,10 @@ class FinancialDataPreprocessor:
                 base_df = base_df.drop(columns=dup_cols)
             
             logger.info(f"  合并后: {len(base_df)} 行")
+        
+        # 删除临时Month列
+        if 'Month' in base_df.columns:
+            base_df = base_df.drop(columns=['Month'])
         
         logger.info(f"\n最终集成数据: {len(base_df)} 行, {len(base_df.columns)} 列")
         return base_df
@@ -371,15 +455,36 @@ class FinancialDataPreprocessor:
         
         # 恢复原始列名
         df['Stkcd'] = df['Stkcd_std'].apply(lambda x: int(x) if pd.notna(x) else np.nan)
-        df['Accper'] = df['Year']
+        # 保留原始Accper日期，如果不存在则用Year填充
+        if 'Accper' not in df.columns:
+            df['Accper'] = df['Year']
         
-        # 确保 Typrep 存在
+        # 确保 Typrep 存在（只保留A和B类型）
         if 'Typrep' not in df.columns:
             df['Typrep'] = ''
+        else:
+            # 再次确保只保留A和B类型
+            before_typrep_filter = len(df)
+            df = df[df['Typrep'].isin(['A', 'B', ''])].copy()
+            after_typrep_filter = len(df)
+            if before_typrep_filter > after_typrep_filter:
+                logger.info(f"  最终过滤非A/B类型: -{before_typrep_filter - after_typrep_filter} 行")
         
-        # 确保 Indcd 存在
+        # 确保 Indcd 存在，并填充相同Stkcd的Indcd
         if 'Indcd' not in df.columns:
             df['Indcd'] = ''
+        else:
+            # 对于相同Stkcd的Indcd进行填充
+            # 先按Stkcd分组，用该组内非空的Indcd填充空值
+            if 'Stkcd' in df.columns:
+                # 创建Stkcd到Indcd的映射（使用非空值）
+                stkcd_indcd_map = df[df['Indcd'].notna() & (df['Indcd'] != '')].groupby('Stkcd')['Indcd'].first().to_dict()
+                # 填充空值
+                mask = (df['Indcd'].isna()) | (df['Indcd'] == '')
+                df.loc[mask, 'Indcd'] = df.loc[mask, 'Stkcd'].map(stkcd_indcd_map)
+                filled_count = mask.sum()
+                if filled_count > 0:
+                    logger.info(f"  填充Indcd: {filled_count} 条记录（使用相同Stkcd的Indcd）")
         
         # 确保所有必需列存在
         for col in self.column_order:
@@ -401,6 +506,17 @@ class FinancialDataPreprocessor:
         after = len(output_df)
         if before > after:
             logger.info(f"删除重复行: -{before - after} 行")
+        
+        # 删除缺失值占比大于50%的行
+        before_missing = len(output_df)
+        # 计算每行的缺失值占比（只考虑指标列，不包括主键和标签列）
+        indicator_cols = [c for c in output_df.columns if c.startswith('F')]
+        if indicator_cols:
+            missing_ratio = output_df[indicator_cols].isnull().sum(axis=1) / len(indicator_cols)
+            output_df = output_df[missing_ratio <= 0.5].copy()
+            after_missing = len(output_df)
+            if before_missing > after_missing:
+                logger.info(f"删除缺失值占比>50%的行: -{before_missing - after_missing} 行")
         
         # 排序
         output_df = output_df.sort_values(['Stkcd', 'Accper', 'Typrep']).reset_index(drop=True)
@@ -448,21 +564,79 @@ class FinancialDataPreprocessor:
         
         output_file = os.path.join(self.output_dir, f'{self.group_id}-preprocessed.csv')
         
-        try:
-            df.to_csv(output_file, index=False, encoding='utf-8-sig')
-            
-            size_mb = os.path.getsize(output_file) / 1024 / 1024
-            logger.info(f"✓ 成功保存: {output_file}")
-            logger.info(f"✓ 文件大小: {size_mb:.2f} MB")
-            logger.info(f"✓ 数据形状: {df.shape}")
-            
-            logger.info(f"\n前5行预览:")
-            logger.info(f"\n{df.head()}")
-            
-            return output_file
-        except Exception as e:
-            logger.error(f"保存失败: {str(e)}")
-            return None
+        # 检查文件是否被占用
+        if os.path.exists(output_file):
+            try:
+                # 尝试重命名以检查文件是否被占用
+                temp_file = output_file + '.tmp'
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                os.rename(output_file, temp_file)
+                os.rename(temp_file, output_file)
+                logger.info(f"文件检查: {output_file} 未被占用")
+            except PermissionError:
+                logger.warning(f"⚠️ 文件 {output_file} 可能被其他程序打开（如Excel）")
+                logger.warning("⚠️ 请关闭该文件后重试，或手动删除该文件")
+                # 尝试保存为带时间戳的文件
+                from datetime import datetime
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                backup_file = os.path.join(self.output_dir, f'{self.group_id}-preprocessed_{timestamp}.csv')
+                logger.info(f"尝试保存为备份文件: {backup_file}")
+                try:
+                    df.to_csv(backup_file, index=False, encoding='utf-8-sig')
+                    size_mb = os.path.getsize(backup_file) / 1024 / 1024
+                    logger.info(f"✓ 成功保存为备份文件: {backup_file}")
+                    logger.info(f"✓ 文件大小: {size_mb:.2f} MB")
+                    logger.info(f"✓ 数据形状: {df.shape}")
+                    return backup_file
+                except Exception as e2:
+                    logger.error(f"备份文件保存也失败: {str(e2)}")
+                    return None
+            except Exception as e:
+                logger.warning(f"文件检查时出现异常: {str(e)}")
+        
+        # 尝试保存文件（带重试机制）
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                df.to_csv(output_file, index=False, encoding='utf-8-sig')
+                
+                size_mb = os.path.getsize(output_file) / 1024 / 1024
+                logger.info(f"✓ 成功保存: {output_file}")
+                logger.info(f"✓ 文件大小: {size_mb:.2f} MB")
+                logger.info(f"✓ 数据形状: {df.shape}")
+                
+                logger.info(f"\n前5行预览:")
+                logger.info(f"\n{df.head()}")
+                
+                return output_file
+            except PermissionError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"保存失败（尝试 {attempt + 1}/{max_retries}）: {str(e)}")
+                    logger.warning("文件可能被其他程序占用，等待2秒后重试...")
+                    import time
+                    time.sleep(2)
+                else:
+                    logger.error(f"保存失败（已重试{max_retries}次）: {str(e)}")
+                    logger.error("请检查文件是否被Excel或其他程序打开")
+                    # 尝试保存为带时间戳的备份文件
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    backup_file = os.path.join(self.output_dir, f'{self.group_id}-preprocessed_{timestamp}.csv')
+                    try:
+                        df.to_csv(backup_file, index=False, encoding='utf-8-sig')
+                        size_mb = os.path.getsize(backup_file) / 1024 / 1024
+                        logger.info(f"✓ 已保存为备份文件: {backup_file}")
+                        logger.info(f"✓ 文件大小: {size_mb:.2f} MB")
+                        return backup_file
+                    except Exception as e2:
+                        logger.error(f"备份文件保存也失败: {str(e2)}")
+                        return None
+            except Exception as e:
+                logger.error(f"保存失败: {str(e)}")
+                return None
+        
+        return None
     
     def run(self):
         """执行完整的数据预处理流程"""

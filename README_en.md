@@ -48,10 +48,25 @@ Financial_Fraud_Detection_Implementation_Project/
 │   └── 集成数据示例.csv          # Reference example
 │
 ├── Insight_output/               # Output directory
-│   ├── 1-preprocessed.csv        # ✅ Final preprocessed data (57,621 rows × 42 columns)
+│   ├── 13-preprocessed.csv       # ✅ Preprocessed data (108,345 rows × 47 columns, Group ID=13)
+│   ├── 13-preprocessed_final.csv # ✅ Deep-cleaned data (108,345 rows × 40 columns, 34 features, VIF filtered)
+│   ├── deep-cleaning.py          # Deep data cleaning script (variance + VIF filtering)
+│   ├── deep-cleaning-report.txt  # Deep cleaning report
 │   ├── preprocess_log_balanced.txt  # Processing log
 │   ├── 质量报告_最终版.md        # Data quality report
-│   └── 完成总结_最终版.md        # Task completion summary
+│   ├── 完成总结_最终版.md        # Task completion summary
+│   └── data-analysis/            # Data analysis directory
+│       ├── 数据分析报告.ipynb    # Complete EDA report
+│       ├── label_distribution.png # Label distribution chart
+│       ├── correlation_heatmap.png # Feature correlation heatmap
+│       ├── feature_label_correlation.png # Feature-label correlation chart
+│       ├── violation_comparison_boxplot.png # Violation/normal group comparison
+│       └── feature_pairplot.png   # Feature pairplot
+│
+├── model/                        # Model training directory (core content)
+│   ├── models/                    # Model definitions
+│   ├── test/                     # Model test scripts
+│   └── results/                  # Model results
 │
 ├── preprocess_data_balanced.py   # ✅ Recommended preprocessing script (three-key strategy)
 ├── preprocess_data_tiny_version.py  # Simplified preprocessing script (two-key strategy)
@@ -72,25 +87,24 @@ pip install pandas numpy openpyxl
 ### Run Data Preprocessing
 
 ```bash
-# Recommended: balanced version (three-key strategy)
+# Step 1: Basic preprocessing (quarterly deduplication, Group ID=13)
 python preprocess_data_balanced.py
 
-# Or use simplified version (two-key strategy)
-python preprocess_data_tiny_version.py
-```
+# Step 2: Deep data cleaning (variance + VIF collinearity filtering)
+cd Insight_output
+python deep-cleaning.py
 
-### Use Jupyter Notebook for Step-by-Step Execution
-
-```bash
-# Open Jupyter Notebook
+# Or use Jupyter Notebook for step-by-step execution
 jupyter notebook 数据预处理步骤指南.ipynb
 ```
 
 ### Output File Locations
 
 After successful execution, preprocessed data will be saved in:
-- **Main file**: `Insight_output/1-preprocessed.csv` (contains Indcd and isST fields)
+- **Basic preprocessing**: `Insight_output/13-preprocessed.csv` (108,345 rows × 47 columns, Group ID=13)
+- **Deep-cleaned data**: `Insight_output/13-preprocessed_final.csv` (108,345 rows × 40 columns, 34 features, VIF filtered)
 - **Log**: `Insight_output/preprocess_log_balanced.txt`
+- **Cleaning report**: `Insight_output/deep-cleaning-report.txt`
 - **Quality report**: `Insight_output/质量报告_最终版.md`
 - **Completion summary**: `Insight_output/完成总结_最终版.md`
 
@@ -98,20 +112,49 @@ After successful execution, preprocessed data will be saved in:
 
 ### Final Output Data
 
+#### Basic Preprocessing (13-preprocessed.csv)
+
 | Metric | Value |
 |--------|-------|
-| **Sample Size** | 57,621 records |
-| **Number of Companies** | 3,757 companies |
+| **Sample Size** | 108,345 records |
+| **Number of Companies** | 3,739 companies |
 | **Time Span** | 2010-2019 (10 years) |
-| **Number of Features** | 42 columns (6 keys/labels + 36 financial indicators) |
-| **Violation Samples** | 2,989 (5.19%) |
-| **ST Samples** | 11,301 (19.61%) |
-| **File Size** | 16.87 MB |
+| **Number of Features** | 47 columns (6 keys/labels + 41 financial indicators, including 5 solvency fields) |
+| **Violation Samples** | 5,829 (5.38%) |
+| **ST Samples** | 22,950 (21.17%) |
+| **File Size** | 36.23 MB |
+
+#### Deep-Cleaned Data (13-preprocessed_final.csv)
+
+| Metric | Value |
+|--------|-------|
+| **Sample Size** | 108,345 records |
+| **Number of Features** | 40 columns (4 keys/labels + 34 financial indicators + Indcd) |
+| **Feature Retention Rate** | 80.95% (34/42 features) |
+| **Removed Features** | 8 features (VIF collinearity filtering) |
+| **VIF Threshold** | ≤ 10 (all features) |
+| **Variance Filtering** | Threshold 0.01 (no features removed) |
+| **Indcd Uniqueness** | ✅ All companies have a single industry classification |
+| **File Size** | ~33 MB |
+
+#### Exploratory Data Analysis Results
+
+**Label Distribution**:
+- Violation samples: 5,829 (5.38%)
+- ST samples: 22,950 (21.17%)
+- Class imbalance: Violation samples are rare, requiring class imbalance handling strategies
+
+**Key Findings**:
+- Feature-label correlation: Identified financial indicators most correlated with violation/ST
+- Group differences: Significant differences between violation and normal companies across multiple financial indicators
+- Feature correlation: Some financial indicators have high correlation, handled through VIF filtering
 
 ### Report Type Distribution
 
-- **Type A (Annual Report)**: 29,025 records (50.37%)
-- **Type B (Semi-annual Report)**: 28,596 records (49.63%)
+- **Type A (Consolidated Report - Period End)**: 29,025 records (50.37%)
+- **Type B (Parent Company Report - Period End)**: 28,596 records (49.63%)
+
+**Note**: According to CSMAR standards, Typrep distinguishes report entity (consolidated/parent) and time (period end/beginning), not disclosure frequency. Annual/semi-annual reports should be identified via the `Accper` field (e.g., "12-31" for annual, "06-30" for semi-annual).
 
 ## 📖 New Fields Description
 
@@ -284,7 +327,8 @@ These 11 missing indicators need to be obtained from external data sources or ca
 1. **Three-key Primary Key Strategy**: Uses (Stkcd, Year, Typrep) as primary keys
    - Stkcd: Standardized to 6-digit string
    - Year: Extracted from Accper date field
-   - Typrep: Original value retained, priority K > C > A > B
+   - Typrep: Original value retained, priority A(consolidated period end) > B(parent period end) > C(consolidated period beginning) > D(parent period beginning)
+   - **Note**: According to CSMAR standards, Typrep distinguishes report entity and time, not disclosure frequency. Annual/semi-annual reports should be identified via Accper field.
 
 2. **Intelligent Deduplication**:
    - Sort by Typrep priority
@@ -385,6 +429,73 @@ For any questions or suggestions, please contact through:
 
 ---
 
-**Last Updated**: 2025-11-08  
-**Project Status**: ✅ Data preprocessing completed
+## 📊 Exploratory Data Analysis (EDA)
+
+### Analysis Overview
+
+Comprehensive exploratory data analysis was performed on the deep-cleaned data (`13-preprocessed_final.csv`), including data quality assessment, distribution analysis, correlation analysis, and group comparisons.
+
+### 1. Label Distribution Analysis
+
+![Label Distribution](Insight_output/data-analysis/label_distribution.png)
+
+**Key Findings**:
+- **Violation Label (isviolation)**: 5.38% of samples are marked as violations, showing significant class imbalance
+- **ST Label (isST)**: 21.17% of samples are marked as ST, relatively high proportion
+- **Recommendation**: Class imbalance handling strategies (e.g., SMOTE, class weights) are needed for model training
+
+### 2. Feature Correlation Analysis
+
+![Correlation Heatmap](Insight_output/data-analysis/correlation_heatmap.png)
+
+**Key Findings**:
+- After VIF filtering, most feature correlations are within reasonable ranges
+- Some operating capability indicators (e.g., turnover-related indicators) still show certain correlations
+- Profitability indicators (ROA, ROE, etc.) have low correlation with solvency indicators
+
+### 3. Feature-Label Correlation Analysis
+
+![Feature-Label Correlation](Insight_output/data-analysis/feature_label_correlation.png)
+
+**Key Findings**:
+- Identified financial indicators most correlated with violation/ST
+- Profitability indicators (e.g., ROA, ROE) are negatively correlated with violation risk
+- Solvency indicators (e.g., asset-liability ratio) are positively correlated with ST risk
+- Operating capability indicators (e.g., turnover rate) show certain association with violation risk
+
+### 4. Group Comparison Analysis
+
+![Violation/Normal Group Comparison](Insight_output/data-analysis/violation_comparison_boxplot.png)
+
+**Key Findings**:
+- Significant differences (p < 0.05) between violation and normal companies across multiple financial indicators
+- Violation companies generally have lower profitability indicators
+- Violation companies generally have higher solvency indicators (e.g., asset-liability ratio)
+- These differences provide valuable feature signals for model training
+
+### 5. Feature Pairplot Analysis
+
+![Feature Pairplot](Insight_output/data-analysis/feature_pairplot.png)
+
+**Key Findings**:
+- Distribution patterns of key feature pairs
+- Distribution differences between violation/normal samples in feature space
+- Provides reference for feature engineering and model selection
+
+### Analysis Report
+
+Complete data analysis report: `Insight_output/data-analysis/数据分析报告.ipynb`
+
+**Report Contents**:
+- Detailed data quality assessment
+- Complete statistical descriptions
+- Correlation analysis results
+- Statistical tests for group comparisons
+- Time trend analysis
+- Industry analysis
+
+---
+
+**Last Updated**: 2025-11-10  
+**Project Status**: ✅ Data preprocessing completed (Group ID=13, quarterly deduplication) | ✅ Deep data cleaning completed (34 features, VIF filtered) | ✅ Exploratory data analysis completed | 🚧 Model training in progress
 
